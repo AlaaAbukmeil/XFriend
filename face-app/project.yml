@@ -1,0 +1,57 @@
+# XcodeGen spec. Regenerate the project with:  xcodegen generate
+# Phase 2 adds a BuddyFace-iOS target that reuses Shared/.
+name: BuddyFace
+options:
+  bundleIdPrefix: local.deskbuddy
+  deploymentTarget:
+    macOS: "14.0"
+settings:
+  base:
+    SWIFT_VERSION: "5.0"
+    MARKETING_VERSION: "0.1"
+    CURRENT_PROJECT_VERSION: "1"
+
+targets:
+  BuddyFace-macOS:
+    type: application
+    platform: macOS
+    sources: [Shared, macOS, Resources]
+    info:
+      path: macOS/Info.plist
+      properties:
+        CFBundleDisplayName: Desk Buddy
+        LSApplicationCategoryType: public.app-category.entertainment
+        NSMicrophoneUsageDescription: Desk Buddy listens so you can talk to it. Audio only goes to the brain on this Mac.
+    settings:
+      base:
+        PRODUCT_NAME: DeskBuddy
+        PRODUCT_BUNDLE_IDENTIFIER: local.deskbuddy.face
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"    # sign to run locally; no Apple account needed on the Mac
+        ENABLE_HARDENED_RUNTIME: NO
+        ENABLE_APP_SANDBOX: NO     # needs a loopback TCP server + mic; it's a local-only tool
+        SWIFT_OBJC_BRIDGING_HEADER: Shared/BuddyFace-Bridging-Header.h
+        ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
+
+  FaceKitTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - Tests
+      - Shared/Protocol.swift
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        CODE_SIGN_STYLE: Manual
+        CODE_SIGN_IDENTITY: "-"
+
+schemes:
+  BuddyFace-macOS:
+    build:
+      targets:
+        BuddyFace-macOS: all
+        FaceKitTests: [test]
+    run:
+      config: Debug
+    test:
+      targets: [FaceKitTests]

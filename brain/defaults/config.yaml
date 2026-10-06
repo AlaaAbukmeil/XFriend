@@ -1,0 +1,14 @@
+# Desk Buddy settings. Lives in ~/BuddyData/config.yaml, so it is never in git.
+
+user_name: Alaa
+
+# LLM served by Ollama. Try: qwen3:8b, llama3.1:8b, gemma3:12b (may be slow on 16 GB)
+model: qwen3:8b
+embed_model: nomic-embed-text
+
+# clean | normal | unhinged. "Keep it clean" by voice switches to clean.
+humor: normal
+
+face:
+  host: 127.0.0.1
+  port: 7777   # Mac face app in Phase 1, iproxy -> iPad in Phase 2
