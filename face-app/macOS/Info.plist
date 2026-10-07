@@ -5,7 +5,7 @@
 	<key>CFBundleDevelopmentRegion</key>
 	<string>$(DEVELOPMENT_LANGUAGE)</string>
 	<key>CFBundleDisplayName</key>
-	<string>Desk Buddy</string>
+	<string>XFriend</string>
 	<key>CFBundleExecutable</key>
 	<string>$(EXECUTABLE_NAME)</string>
 	<key>CFBundleIdentifier</key>
@@ -23,6 +23,6 @@
 	<key>LSApplicationCategoryType</key>
 	<string>public.app-category.entertainment</string>
 	<key>NSMicrophoneUsageDescription</key>
-	<string>Desk Buddy listens so you can talk to it. Audio only goes to the brain on this Mac.</string>
+	<string>XFriend listens so you can talk to it. Audio only goes to the brain on this Mac.</string>
 </dict>
 </plist>

@@ -28,9 +28,8 @@ final class FaceController {
         audio.onMicChunk = { [link] chunk in link.send(.micAudio, chunk) }
         link.start()
 
-        Task {
-            model.audioStatus = await audio.start()
-        }
+        audio.onStatus = { [weak self] status in self?.model.audioStatus = status }
+        Task { await audio.start() }
         // Copy audio counters into the model at 2 Hz rather than 50 Hz.
         statsTimer = Timer.scheduledTimer(withTimeInterval: 0.5, repeats: true) { [weak self] _ in
             MainActor.assumeIsolated {

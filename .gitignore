@@ -9,3 +9,4 @@ face-app/*.xcodeproj/
 face-app/build/
 DerivedData/
 xcuserdata/
+models/

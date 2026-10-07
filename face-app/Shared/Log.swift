@@ -2,15 +2,15 @@ import Foundation
 import os
 
 /// Logging to two places at once:
-///  - a fixed file you can always review: ~/BuddyData/logs/face.log on the Mac
+///  - a fixed file you can always review: ~/XFriendData/logs/face.log on the Mac
 ///    (rotates to face.log.1 at 5 MB). On the iPad it's the app's Documents/face.log.
 ///  - unified logging (Console.app, or
-///    /usr/bin/log stream --predicate 'subsystem == "local.deskbuddy.face"').
+///    /usr/bin/log stream --predicate 'subsystem == "local.xfriend.face"').
 enum Log {
-    static let subsystem = "local.deskbuddy.face"
-    static let app = BuddyLogger(category: "app")
-    static let link = BuddyLogger(category: "link")
-    static let audio = BuddyLogger(category: "audio")
+    static let subsystem = "local.xfriend.face"
+    static let app = FaceLogger(category: "app")
+    static let link = FaceLogger(category: "link")
+    static let audio = FaceLogger(category: "audio")
 
     static var fileURL: URL { LogFile.shared.url }
 
@@ -24,7 +24,7 @@ enum Log {
     }
 }
 
-struct BuddyLogger {
+struct FaceLogger {
     let category: String
     private let os: Logger
 
@@ -103,9 +103,9 @@ final class LogFile {
         // The iPad keeps nothing important; this is just for debugging the face.
         return FileManager.default.urls(for: .documentDirectory, in: .userDomainMask)[0]
         #else
-        // Same folder as the brain's logs. Honors $BUDDY_DATA like brain/config.py.
-        let data = ProcessInfo.processInfo.environment["BUDDY_DATA"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
-            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("BuddyData")
+        // Same folder as the brain's logs. Honors $XFRIEND_DATA like brain/config.py.
+        let data = ProcessInfo.processInfo.environment["XFRIEND_DATA"].map { URL(fileURLWithPath: ($0 as NSString).expandingTildeInPath) }
+            ?? FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent("XFriendData")
         return data.appendingPathComponent("logs")
         #endif
     }

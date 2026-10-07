@@ -25,3 +25,13 @@ def test_mood_carries_over_untagged_sentences():
     stream = SentenceStream()
     got = stream.feed("[sad] Oh no. That sucks. ") + stream.flush()
     assert [(s.mood, s.text) for s in got] == [("sad", "Oh no."), ("sad", "That sucks.")]
+
+
+def test_first_chunk_breaks_at_clause_once_long_enough():
+    stream = SentenceStream()
+    got = stream.feed("[sarcastic] Oh, just chilling here, pretending I care, ")
+    # "Oh," is too short to speak alone; "Oh, just chilling here," has 4 words.
+    assert [(s.mood, s.text) for s in got] == [("sarcastic", "Oh, just chilling here,")]
+    # After the first chunk, short clauses wait for the sentence end.
+    assert stream.feed("you know, ") == []
+    assert [s.text for s in stream.feed("whatever. ")] == ["pretending I care, you know, whatever."]

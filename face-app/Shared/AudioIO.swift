@@ -7,30 +7,28 @@ import CoreAudio
 /// One AVAudioEngine for both directions. Voice processing on the input node gives
 /// Apple's echo cancellation; because TTS plays through the same engine, the canceller
 /// knows exactly what the robot is saying and removes it from the mic signal.
+///
+/// Whenever audio devices change (a Bluetooth headset connects, a USB mic is unplugged)
+/// the whole engine is rebuilt and the mic is detected again, so the face never needs
+/// a restart. With no mic at all (a bare Mac mini) it runs playback-only.
+@MainActor
 final class AudioIO {
     /// Called on the audio thread with exactly 20 ms (640 bytes) of 16 kHz Int16 mono PCM.
-    var onMicChunk: ((Data) -> Void)?
-    var muted = false
+    nonisolated(unsafe) var onMicChunk: ((Data) -> Void)?
+    /// Human-readable status for the debug overlay, called on the main thread.
+    var onStatus: ((String) -> Void)?
+    nonisolated(unsafe) var muted = false
 
-    private(set) var micChunksSent = 0
+    nonisolated(unsafe) private(set) var micChunksSent = 0
     private(set) var ttsBytesReceived = 0
 
-    private let engine = AVAudioEngine()
-    private let player = AVAudioPlayerNode()
+    private var engine = AVAudioEngine()
+    private var player = AVAudioPlayerNode()
     private let playFormat = AVAudioFormat(standardFormatWithSampleRate: ProtocolConstants.ttsSampleRate, channels: 1)!
-    private let micFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: ProtocolConstants.micSampleRate,
-                                          channels: 1, interleaved: true)!
-    private var converter: AVAudioConverter?
-    private var pending = Data()
     private var configObserver: NSObjectProtocol?
-    private var hasMic = false
-    private var voiceProcessing = false
-    private var micName = ""
-    private var micNote = ""
+    private var rebuildTask: Task<Void, Never>?
 
-    /// Returns a human-readable status for the debug overlay. Never crashes: with no
-    /// microphone (a Mac mini has none built in) the face still plays the robot's voice.
-    func start() async -> String {
+    func start() async {
         #if os(iOS)
         do {
             let session = AVAudioSession.sharedInstance()
@@ -40,34 +38,14 @@ final class AudioIO {
         } catch {
             Log.audio.error("audio session error: \(error.localizedDescription)")
         }
+        NotificationCenter.default.addObserver(forName: AVAudioSession.routeChangeNotification, object: nil,
+                                               queue: .main) { [weak self] _ in
+            MainActor.assumeIsolated { self?.scheduleRebuild(reason: "audio route changed") }
+        }
+        #else
+        watchDefaultDevices()
         #endif
-
-        if let mic = Self.microphoneName() {
-            if await Self.requestMicPermission() {
-                hasMic = true
-                micName = mic
-                enableVoiceProcessing()
-            } else {
-                micNote = "mic permission denied"
-                Log.audio.error("microphone permission denied; playback only")
-            }
-        } else {
-            micNote = "no microphone"
-            Log.audio.notice("no input device found; playback only")
-        }
-
-        engine.attach(player)
-        engine.connect(player, to: engine.mainMixerNode, format: playFormat)
-
-        let status = startEngine()
-        configObserver = NotificationCenter.default.addObserver(
-            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
-        ) { [weak self] _ in
-            // Device changed (e.g. headset plugged in): rebuild the tap and restart.
-            Log.audio.notice("audio configuration changed, restarting engine")
-            _ = self?.startEngine()
-        }
-        return status
+        await rebuild()
     }
 
     /// Queue a chunk of 24 kHz Int16 mono TTS audio for playback.
@@ -84,6 +62,7 @@ final class AudioIO {
             }
         }
         ttsBytesReceived += data.count
+        guard engine.isRunning else { return }
         player.scheduleBuffer(buffer)
         if !player.isPlaying { player.play() }
     }
@@ -91,95 +70,190 @@ final class AudioIO {
     /// Barge-in: drop everything queued, immediately.
     func stopPlayback() {
         player.stop()
-        player.play()
+        if engine.isRunning { player.play() }
     }
 
-    // MARK: - Private
+    // MARK: - Engine lifecycle
 
-    private func enableVoiceProcessing() {
+    /// Device changes arrive in bursts, so wait for things to settle before rebuilding.
+    private func scheduleRebuild(reason: String, from first: Mode = .echoCancelledMic) {
+        rebuildTask?.cancel()
+        rebuildTask = Task { [weak self] in
+            try? await Task.sleep(for: .milliseconds(600))
+            guard !Task.isCancelled, let self else { return }
+            Log.audio.notice("\(reason), rebuilding audio engine")
+            await self.rebuild(from: first)
+        }
+    }
+
+    /// How much of the audio stack to bring up. If a level fails to start (some
+    /// Bluetooth headsets reject voice processing), the next one down is tried.
+    private enum Mode: CaseIterable {
+        case echoCancelledMic, plainMic, playbackOnly
+    }
+
+    /// Mode that last started successfully; config changes resume from here instead of
+    /// re-trying modes this device already rejected.
+    private var workingMode: Mode?
+    private var tappedMic: String?
+    private var tappedRate: Double = 0
+
+    private func rebuild(from first: Mode = .echoCancelledMic) async {
+        for mode in Mode.allCases.drop(while: { $0 != first }) {
+            if await build(mode) {
+                workingMode = mode
+                return
+            }
+        }
+        workingMode = nil
+        onStatus?("audio failed to start (see face.log)")
+    }
+
+    /// Engine configuration changed (e.g. a Bluetooth headset switching to its call
+    /// profile when the mic opens). If it's the same mic at the same rate, just restart;
+    /// otherwise rebuild, keeping the mode that already works.
+    private func handleConfigChange() {
+        let sameMic = Self.microphoneName() == tappedMic
+        let sameRate = tappedMic == nil || engine.inputNode.outputFormat(forBus: 0).sampleRate == tappedRate
+        if sameMic && sameRate {
+            var error: NSError?
+            var swiftError: Error?
+            let engine = self.engine
+            let ok = XFCatchObjC({ do { try engine.start() } catch { swiftError = error } }, &error)
+            if ok && swiftError == nil {
+                player.play()
+                Log.audio.info("audio configuration changed, engine restarted")
+                return
+            }
+        }
+        scheduleRebuild(reason: "audio configuration changed", from: workingMode ?? .echoCancelledMic)
+    }
+
+    /// Returns true if the engine started.
+    private func build(_ mode: Mode) async -> Bool {
+        teardown()
+        engine = AVAudioEngine()
+        player = AVAudioPlayerNode()
+
+        var micStatus = ""
+        var useMic = false
+        if mode != .playbackOnly {
+            guard let mic = Self.microphoneName() else {
+                return await build(.playbackOnly, note: "no microphone")
+            }
+            guard await Self.requestMicPermission() else {
+                return await build(.playbackOnly, note: "mic permission denied")
+            }
+            useMic = true
+            micStatus = "mic \(mic)"
+            if mode == .echoCancelledMic {
+                guard enableVoiceProcessing() else { return false }
+                micStatus += ", echo cancel"
+            } else {
+                micStatus += ", NO echo cancel (use headphones)"
+            }
+        }
+
+        engine.attach(player)
+        engine.connect(player, to: engine.mainMixerNode, format: playFormat)
+
+        if useMic {
+            let input = engine.inputNode
+            let inFormat = input.outputFormat(forBus: 0)
+            guard inFormat.sampleRate > 0, inFormat.channelCount > 0, let chunker = MicChunker(from: inFormat) else {
+                Log.audio.error("\(mode): mic has no usable format")
+                return false
+            }
+            chunker.onChunk = { [weak self] chunk in
+                guard let self, !self.muted else { return }
+                self.micChunksSent += 1
+                self.onMicChunk?(chunk)
+            }
+            input.installTap(onBus: 0, bufferSize: 1024, format: inFormat) { buffer, _ in
+                chunker.handle(buffer)
+            }
+            micStatus += ", \(Int(inFormat.sampleRate)) Hz"
+            tappedRate = inFormat.sampleRate
+        }
+        tappedMic = useMic ? Self.microphoneName() : nil
+
+        var startError: NSError?
+        var swiftError: Error?
+        let engine = self.engine
+        let ok = XFCatchObjC({
+            engine.prepare()
+            do { try engine.start() } catch { swiftError = error }
+        }, &startError)
+        if let error = swiftError ?? (ok ? nil : startError) {
+            Log.audio.error("\(mode) failed to start: \(error.localizedDescription)")
+            return false
+        }
+        player.play()
+        let status = useMic ? micStatus : "playback only (\(pendingNote ?? "mic unavailable"))"
+        pendingNote = nil
+        Log.audio.notice("audio running: \(status)")
+        onStatus?(status)
+
+        // Only a running engine gets to trigger rebuilds; a failed start also posts
+        // configuration changes, which would otherwise loop forever.
+        configObserver = NotificationCenter.default.addObserver(
+            forName: .AVAudioEngineConfigurationChange, object: engine, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { self?.handleConfigChange() }
+        }
+        return true
+    }
+
+    private var pendingNote: String?
+
+    private func build(_ mode: Mode, note: String) async -> Bool {
+        pendingNote = note
+        return await build(mode)
+    }
+
+    private func teardown() {
+        if let configObserver { NotificationCenter.default.removeObserver(configObserver) }
+        configObserver = nil
+        engine.inputNode.removeTap(onBus: 0)
+        player.stop()
+        engine.stop()
+    }
+
+    /// Returns true if echo cancellation is on.
+    private func enableVoiceProcessing() -> Bool {
         var swiftError: Error?
         var objcError: NSError?
-        let ok = BuddyCatchObjC({
-            do { try self.engine.inputNode.setVoiceProcessingEnabled(true) } catch { swiftError = error }
+        let input = engine.inputNode
+        let ok = XFCatchObjC({
+            do { try input.setVoiceProcessingEnabled(true) } catch { swiftError = error }
         }, &objcError)
         if let error = swiftError ?? (ok ? nil : objcError) {
             Log.audio.error("voice processing unavailable, no echo cancellation: \(error.localizedDescription)")
-            return
+            return false
         }
-        voiceProcessing = true
         if #available(macOS 14.0, iOS 17.0, *) {
             // Don't let voice processing crush other audio (music etc.) on the device.
-            engine.inputNode.voiceProcessingOtherAudioDuckingConfiguration =
-                .init(enableAdvancedDucking: false, duckingLevel: .min)
+            input.voiceProcessingOtherAudioDuckingConfiguration = .init(enableAdvancedDucking: false, duckingLevel: .min)
         }
+        return true
     }
 
-    private func startEngine() -> String {
-        engine.stop()
-        var micStatus = micNote
-        if hasMic {
-            let input = engine.inputNode
-            input.removeTap(onBus: 0)
-            let inFormat = input.outputFormat(forBus: 0)
-            if inFormat.sampleRate > 0, inFormat.channelCount > 0 {
-                converter = AVAudioConverter(from: inFormat, to: micFormat)
-                pending.removeAll()
-                input.installTap(onBus: 0, bufferSize: 1024, format: inFormat) { [weak self] buffer, _ in
-                    self?.handleMic(buffer)
-                }
-                micStatus = "mic \(micName) \(Int(inFormat.sampleRate)) Hz\(voiceProcessing ? ", echo cancel" : ", NO echo cancel")"
-            } else {
-                micStatus = "mic has no usable format"
-            }
-        }
-        var startError: NSError?
-        var swiftError: Error?
-        let ok = BuddyCatchObjC({
-            self.engine.prepare()
-            do { try self.engine.start() } catch { swiftError = error }
-        }, &startError)
-        if let error = swiftError ?? (ok ? nil : startError) {
-            Log.audio.error("engine failed to start: \(error.localizedDescription)")
-            return "engine error: \(error.localizedDescription)"
-        }
-        player.play()
-        let status = hasMic ? micStatus : "playback only (\(micStatus))"
-        Log.audio.notice("audio running: \(status)")
-        return status
-    }
-
-    private func handleMic(_ buffer: AVAudioPCMBuffer) {
-        guard let converter else { return }
-        let ratio = micFormat.sampleRate / buffer.format.sampleRate
-        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
-        guard let out = AVAudioPCMBuffer(pcmFormat: micFormat, frameCapacity: capacity) else { return }
-
-        var fed = false
-        var error: NSError?
-        converter.convert(to: out, error: &error) { _, status in
-            if fed {
-                status.pointee = .noDataNow
-                return nil
-            }
-            fed = true
-            status.pointee = .haveData
-            return buffer
-        }
-        guard error == nil, out.frameLength > 0, let samples = out.int16ChannelData?[0] else { return }
-        pending.append(Data(bytes: samples, count: Int(out.frameLength) * 2))
-
-        while pending.count >= ProtocolConstants.micChunkBytes {
-            let chunk = pending.prefix(ProtocolConstants.micChunkBytes)
-            pending = pending.dropFirst(ProtocolConstants.micChunkBytes)
-            if !muted {
-                micChunksSent += 1
-                onMicChunk?(Data(chunk))
+    #if os(macOS)
+    /// AVAudioEngine doesn't always notice a new default device (e.g. a Bluetooth headset
+    /// connecting while the app runs), so listen to CoreAudio directly too.
+    private func watchDefaultDevices() {
+        for selector in [kAudioHardwarePropertyDefaultInputDevice, kAudioHardwarePropertyDefaultOutputDevice] {
+            var addr = AudioObjectPropertyAddress(mSelector: selector, mScope: kAudioObjectPropertyScopeGlobal,
+                                                  mElement: kAudioObjectPropertyElementMain)
+            AudioObjectAddPropertyListenerBlock(AudioObjectID(kAudioObjectSystemObject), &addr, .main) { [weak self] _, _ in
+                MainActor.assumeIsolated { self?.scheduleRebuild(reason: "default audio device changed") }
             }
         }
     }
+    #endif
 
     /// Name of a usable input device, or nil if there is none.
-    private static func microphoneName() -> String? {
+    nonisolated private static func microphoneName() -> String? {
         #if os(iOS)
         return AVAudioSession.sharedInstance().isInputAvailable ? "built-in" : nil
         #else
@@ -210,7 +284,7 @@ final class AudioIO {
         #endif
     }
 
-    private static func requestMicPermission() async -> Bool {
+    nonisolated private static func requestMicPermission() async -> Bool {
         #if os(iOS)
         return await AVAudioApplication.requestRecordPermission()
         #else
@@ -220,5 +294,46 @@ final class AudioIO {
         default: return false
         }
         #endif
+    }
+}
+
+/// Converts the mic's native format to 16 kHz Int16 mono and slices it into 20 ms
+/// chunks. Lives on the audio thread; one instance per engine build.
+private final class MicChunker {
+    var onChunk: ((Data) -> Void)?
+    private let converter: AVAudioConverter
+    private let outFormat = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: ProtocolConstants.micSampleRate,
+                                          channels: 1, interleaved: true)!
+    private var pending = Data()
+
+    init?(from inFormat: AVAudioFormat) {
+        guard let converter = AVAudioConverter(from: inFormat, to: outFormat) else { return nil }
+        self.converter = converter
+    }
+
+    func handle(_ buffer: AVAudioPCMBuffer) {
+        let ratio = outFormat.sampleRate / buffer.format.sampleRate
+        let capacity = AVAudioFrameCount(Double(buffer.frameLength) * ratio) + 64
+        guard let out = AVAudioPCMBuffer(pcmFormat: outFormat, frameCapacity: capacity) else { return }
+
+        var fed = false
+        var error: NSError?
+        converter.convert(to: out, error: &error) { _, status in
+            if fed {
+                status.pointee = .noDataNow
+                return nil
+            }
+            fed = true
+            status.pointee = .haveData
+            return buffer
+        }
+        guard error == nil, out.frameLength > 0, let samples = out.int16ChannelData?[0] else { return }
+        pending.append(Data(bytes: samples, count: Int(out.frameLength) * 2))
+
+        while pending.count >= ProtocolConstants.micChunkBytes {
+            let chunk = Data(pending.prefix(ProtocolConstants.micChunkBytes))
+            pending = Data(pending.dropFirst(ProtocolConstants.micChunkBytes))
+            onChunk?(chunk)
+        }
     }
 }

@@ -1,4 +1,4 @@
-// Renders the Desk Buddy app icon (the robot's eyes) and fills the asset catalog.
+// Renders the XFriend app icon (the robot's eyes) and fills the asset catalog.
 //   swift face-app/tools/make_icon.swift
 // Output: face-app/Resources/Assets.xcassets/AppIcon.appiconset/*.png
 

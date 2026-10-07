@@ -1,8 +1,8 @@
 # XcodeGen spec. Regenerate the project with:  xcodegen generate
-# Phase 2 adds a BuddyFace-iOS target that reuses Shared/.
-name: BuddyFace
+# Phase 2 adds a XFriend-iOS target that reuses Shared/.
+name: XFriend
 options:
-  bundleIdPrefix: local.deskbuddy
+  bundleIdPrefix: local.xfriend
   deploymentTarget:
     macOS: "14.0"
 settings:
@@ -12,25 +12,25 @@ settings:
     CURRENT_PROJECT_VERSION: "1"
 
 targets:
-  BuddyFace-macOS:
+  XFriend-macOS:
     type: application
     platform: macOS
     sources: [Shared, macOS, Resources]
     info:
       path: macOS/Info.plist
       properties:
-        CFBundleDisplayName: Desk Buddy
+        CFBundleDisplayName: XFriend
         LSApplicationCategoryType: public.app-category.entertainment
-        NSMicrophoneUsageDescription: Desk Buddy listens so you can talk to it. Audio only goes to the brain on this Mac.
+        NSMicrophoneUsageDescription: XFriend listens so you can talk to it. Audio only goes to the brain on this Mac.
     settings:
       base:
-        PRODUCT_NAME: DeskBuddy
-        PRODUCT_BUNDLE_IDENTIFIER: local.deskbuddy.face
+        PRODUCT_NAME: XFriend
+        PRODUCT_BUNDLE_IDENTIFIER: local.xfriend.face
         CODE_SIGN_STYLE: Manual
         CODE_SIGN_IDENTITY: "-"    # sign to run locally; no Apple account needed on the Mac
         ENABLE_HARDENED_RUNTIME: NO
         ENABLE_APP_SANDBOX: NO     # needs a loopback TCP server + mic; it's a local-only tool
-        SWIFT_OBJC_BRIDGING_HEADER: Shared/BuddyFace-Bridging-Header.h
+        SWIFT_OBJC_BRIDGING_HEADER: Shared/XFriend-Bridging-Header.h
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
 
   FaceKitTests:
@@ -46,10 +46,10 @@ targets:
         CODE_SIGN_IDENTITY: "-"
 
 schemes:
-  BuddyFace-macOS:
+  XFriend-macOS:
     build:
       targets:
-        BuddyFace-macOS: all
+        XFriend-macOS: all
         FaceKitTests: [test]
     run:
       config: Debug

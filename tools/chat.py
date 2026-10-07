@@ -5,7 +5,7 @@
     uv run python -m tools.chat --compare qwen3:8b,llama3.1:8b
     uv run python -m tools.chat --face        # also drive the face app's eyes
 
-Commands: /humor clean|normal|unhinged, /reset, /quit
+Commands: /humor clean|normal|unhinged, /reset, /quit (or quit, exit, Ctrl+C)
 """
 
 from __future__ import annotations
@@ -80,11 +80,11 @@ async def main() -> None:
     while True:
         try:
             line = (await ainput("\nyou> ")).strip()
-        except (EOFError, KeyboardInterrupt):
+        except EOFError:
             break
         if not line:
             continue
-        if line == "/quit":
+        if line.lstrip("/\\").lower() in ("quit", "exit", "q"):
             break
         if line == "/reset":
             histories = {m: [] for m in models}
@@ -118,4 +118,7 @@ async def main() -> None:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    try:
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print()
