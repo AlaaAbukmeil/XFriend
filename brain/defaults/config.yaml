@@ -1,4 +1,4 @@
-# Desk Buddy settings. Lives in ~/BuddyData/config.yaml, so it is never in git.
+# XFriend settings. Lives in ~/XFriendData/config.yaml, so it is never in git.
 
 user_name: Alaa
 
@@ -12,3 +12,20 @@ humor: normal
 face:
   host: 127.0.0.1
   port: 7777   # Mac face app in Phase 1, iproxy -> iPad in Phase 2
+
+# Greet out loud whenever the face app (re)connects.
+greet_on_connect: true
+# After this much silence, the next thing you say starts a fresh conversation.
+conversation_timeout_s: 120
+
+voice:
+  name: af_heart        # Kokoro voice. Try: af_heart, af_bella, am_puck, am_michael, bm_george, bf_emma
+  speed: 1.0
+  stt_model: mlx-community/whisper-small.en-mlx   # 0.2 s/turn. More accurate, 4x slower: mlx-community/whisper-large-v3-turbo
+  language: en          # set to null to auto-detect
+  barge_in: true        # talking over the robot stops it. Turn off if it hears itself on speakers.
+
+vad:
+  threshold: 0.5        # speech probability needed to count as talking
+  silence_ms: 600       # quiet time that ends your turn (500-700 is typical)
+  min_speech_ms: 250    # shorter blips (coughs, clicks) are ignored

@@ -1,4 +1,4 @@
-"""Loads the robot's identity from ~/BuddyData (override with $BUDDY_DATA).
+"""Loads the robot's identity from ~/XFriendData (override with $XFRIEND_DATA).
 
 On first run, starter persona.md and config.yaml are copied in from brain/defaults/.
 """
@@ -16,7 +16,7 @@ DEFAULTS_DIR = Path(__file__).parent / "defaults"
 
 
 def data_dir() -> Path:
-    return Path(os.environ.get("BUDDY_DATA", Path.home() / "BuddyData")).expanduser()
+    return Path(os.environ.get("XFRIEND_DATA", Path.home() / "XFriendData")).expanduser()
 
 
 @dataclass
@@ -61,6 +61,6 @@ def load() -> Config:
         humor=raw.get("humor", "normal"),
         user_name=raw.get("user_name", "friend"),
         face_host=face.get("host", "127.0.0.1"),
-        face_port=int(face.get("port", 7777)),
+        face_port=int(os.environ.get("XFRIEND_FACE_PORT") or face.get("port", 7777)),
         raw=raw,
     )

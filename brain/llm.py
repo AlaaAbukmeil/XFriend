@@ -21,6 +21,10 @@ HUMOR_RULES = {
 _TAG = re.compile(r"\[(\w+)\]\s*")
 # End of a sentence: terminal punctuation followed by whitespace, or a newline.
 _SENTENCE_END = re.compile(r"(?<=[.!?…])[\"')\]]*\s+|\n+")
+# Clause boundary: used to start speaking before the first full sentence is done.
+_CLAUSE_END = re.compile(r"(?<=[,;:—–])\s+")
+FIRST_CHUNK_MIN_WORDS = 4
+LONG_SENTENCE_CHARS = 140
 _THINK = re.compile(r"<think>.*?</think>\s*", re.S)
 
 
@@ -55,23 +59,44 @@ def split_tagged(text: str, default_mood: str) -> list[Sentence]:
     return out
 
 
+def _words(text: str) -> int:
+    return len(_TAG.sub("", text).split())
+
+
 class SentenceStream:
-    """Turns a token stream into complete mood-tagged sentences as early as possible."""
+    """Turns a token stream into mood-tagged speakable chunks as early as possible.
+
+    Normally a chunk is a sentence. The very first chunk of a reply may end at a
+    clause (comma, dash...) once it has a few words, so the robot starts talking
+    sooner; very long sentences are also split at clauses.
+    """
 
     def __init__(self, mood: str = "neutral") -> None:
         self.mood = mood
         self._buf = ""
+        self._emitted = 0
 
     def feed(self, token: str) -> list[Sentence]:
         self._buf += token
         out: list[Sentence] = []
         while True:
-            m = _SENTENCE_END.search(self._buf)
-            if not m:
+            end = self._find_break()
+            if end is None:
                 break
-            chunk, self._buf = self._buf[:m.end()], self._buf[m.end():]
+            chunk, self._buf = self._buf[:end], self._buf[end:]
             out.extend(self._emit(chunk))
         return out
+
+    def _find_break(self) -> int | None:
+        m = _SENTENCE_END.search(self._buf)
+        if m:
+            return m.end()
+        if self._emitted == 0 or len(self._buf) > LONG_SENTENCE_CHARS:
+            min_words = FIRST_CHUNK_MIN_WORDS if self._emitted == 0 else 6
+            for c in _CLAUSE_END.finditer(self._buf):
+                if _words(self._buf[:c.start()]) >= min_words:
+                    return c.end()
+        return None
 
     def flush(self) -> list[Sentence]:
         chunk, self._buf = self._buf, ""
@@ -81,6 +106,7 @@ class SentenceStream:
         sentences = [s for s in split_tagged(chunk, self.mood) if s.text]
         if sentences:
             self.mood = sentences[-1].mood
+            self._emitted += len(sentences)
         return sentences
 
 

@@ -1,4 +1,4 @@
-"""Logging to a fixed, always-reviewable file: ~/BuddyData/logs/brain.log.
+"""Logging to a fixed, always-reviewable file: ~/XFriendData/logs/brain.log.
 
 Rotates at 5 MB, keeping brain.log.1 .. brain.log.5. The face app writes its own
 log next to it (face.log), so one folder holds the whole story.
@@ -36,3 +36,5 @@ def setup(tool: str, console_level: int = logging.WARNING) -> None:
     root.addHandler(console)
     # Keep HTTP chatter from the Ollama client out of the file.
     logging.getLogger("httpx").setLevel(logging.WARNING)
+    # Kokoro's phonemizer warns on harmless word-count mismatches every few sentences.
+    logging.getLogger("phonemizer").setLevel(logging.ERROR)
